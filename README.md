@@ -395,4 +395,4 @@ them with `zellij action list-panes | grep scratchpad-zellij`, close extras with
 
 ## Licence
 
-MIT.
+MIT — see [LICENSE](LICENSE).

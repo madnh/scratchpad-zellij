@@ -88,12 +88,6 @@ const DEFAULT_PAD: &str = "─";
 /// The glyph marking the author who just posted, and is therefore blocked.
 const DEFAULT_BLOCKED_MARK: &str = "⊘";
 
-/// What separates a tab's own name from the trouble count appended to it.
-///
-/// Distinct enough to strip back off reliably, short enough for a tab bar, and it carries
-/// the same meaning as `✗` everywhere else in this plugin.
-const TAB_MARK: &str = " ✗";
-
 /// The glyph that heads a pad group.
 ///
 /// `▤` is a square with horizontal rules — a sheet with writing on it — and it stays in
@@ -202,9 +196,6 @@ enum Align {
 #[derive(Clone, Debug)]
 struct Pane {
     id: u32,
-    /// Which tab holds this pane. `PaneManifest` is keyed by tab position, so this costs
-    /// nothing to collect — and it is what lets a tab report only its OWN trouble.
-    tab: usize,
     /// The title as zellij reports it, badge and all.
     raw_title: String,
     /// The same title with our badge removed — what the pane would be called if this
@@ -277,10 +268,6 @@ struct State {
     turn_mark: String,
     /// The glyph heading each pad group.
     pad_mark: String,
-    /// Whether to append a trouble count to each tab's name.
-    tab_label: bool,
-    /// Tabs as zellij last reported them: (stable id, position, stripped name).
-    tabs: Vec<(usize, usize, String)>,
     /// Whether to colour the FRAME of a pane running an agent nobody is listening for.
     ///
     /// This goes through `highlight_and_unhighlight_panes`, not `set_pane_color`. The
@@ -346,8 +333,6 @@ impl Default for State {
             pad: DEFAULT_PAD.to_owned(),
             turn_mark: DEFAULT_BLOCKED_MARK.to_owned(),
             pad_mark: DEFAULT_PAD_MARK.to_owned(),
-            tab_label: false,
-            tabs: vec![],
             highlighting: false,
             highlighted: BTreeSet::new(),
             pads: BTreeMap::new(),
@@ -399,7 +384,6 @@ impl ZellijPlugin for State {
             }
         }
         self.highlighting = configuration.get("highlight").is_some_and(|v| v == "true");
-        self.tab_label = configuration.get("tab_label").is_some_and(|v| v == "true");
         if configuration.get("view").is_some_and(|v| v == "pane") {
             self.view = View::Pane;
         }
@@ -412,7 +396,6 @@ impl ZellijPlugin for State {
         ]);
         subscribe(&[
             EventType::PaneUpdate,
-            EventType::TabUpdate,
             EventType::RunCommandResult,
             EventType::Timer,
             EventType::PermissionRequestResult,
@@ -449,21 +432,12 @@ impl ZellijPlugin for State {
                 set_timeout(self.interval);
                 false
             }
-            Event::TabUpdate(tabs) => {
-                self.tabs = tabs
-                    .iter()
-                    .map(|t| (t.tab_id, t.position, strip_tab_mark(&t.name)))
-                    .collect();
-                self.sync_tabs();
-                false
-            }
             Event::PaneUpdate(manifest) => {
                 self.updates += 1;
                 self.take_panes(manifest);
                 self.rejoin();
                 self.sync_labels();
                 self.sync_highlights();
-                self.sync_tabs();
                 true
             }
             Event::RunCommandResult(exit, stdout, stderr, context) => {
@@ -471,7 +445,6 @@ impl ZellijPlugin for State {
                 self.rejoin();
                 self.sync_labels();
                 self.sync_highlights();
-                self.sync_tabs();
                 true
             }
             Event::Key(key) => match key.bare_key {
@@ -516,10 +489,8 @@ impl ZellijPlugin for State {
             Event::BeforeClose => {
                 self.labelling = false;
                 self.highlighting = false;
-                self.tab_label = false;
                 self.sync_labels();
                 self.sync_highlights();
-                self.sync_tabs();
                 false
             }
             _ => false,
@@ -948,7 +919,7 @@ impl State {
     fn take_panes(&mut self, manifest: PaneManifest) {
         self.elect_writer(&manifest);
         let mut panes = vec![];
-        for (tab, tab_panes) in &manifest.panes {
+        for tab_panes in manifest.panes.values() {
             for info in tab_panes {
                 // Plugin panes have no process of their own to match, and unselectable
                 // panes are UI furniture (the status bar, the tab bar).
@@ -970,7 +941,6 @@ impl State {
                 };
                 panes.push(Pane {
                     id: info.id,
-                    tab: *tab,
                     raw_title: info.title.clone(),
                     title: strip_badge(&info.title),
                     pid,
@@ -1363,42 +1333,6 @@ impl State {
     /// Only the DIFFERENCE is sent. Each call makes the server re-render the screen, so
     /// re-asserting the same set every few seconds would repaint the session forever — the
     /// same shape of mistake as re-asking for a pid that cannot have changed.
-    /// Append each tab's own trouble count to its name.
-    ///
-    /// Per tab, not per session: `PaneManifest` is keyed by tab position, so a tab can
-    /// report only the unattended agents it actually holds. A session-wide number pinned
-    /// to every tab would send you to the wrong one.
-    ///
-    /// Only trouble is written. A tab with nothing wrong keeps its name untouched, because
-    /// this is a warning and a warning that is always present is wallpaper. It is also the
-    /// least invasive thing to do to a name the user chose.
-    fn sync_tabs(&mut self) {
-        if !self.writer {
-            return;
-        }
-        let mut renames: Vec<(usize, String)> = vec![];
-        for (id, position, clean) in &self.tabs {
-            let trouble = self
-                .panes
-                .iter()
-                .filter(|p| p.tab == *position && self.is_unattended(p))
-                .count();
-            let wanted = if self.tab_label && trouble > 0 {
-                format!("{clean}{TAB_MARK}{trouble}")
-            } else {
-                clean.clone()
-            };
-            // `self.tabs` already holds the STRIPPED name, so compare against what zellij
-            // would show. Nothing is stored about what we last wrote: the mark is cut off
-            // whatever the name says now, exactly like the pane badge.
-            renames.push((*id, wanted));
-        }
-        for (id, name) in renames {
-            // `TabInfo.tab_id` is usize; the rename call takes u64.
-            rename_tab_with_id(id as u64, &name);
-        }
-    }
-
     fn sync_highlights(&mut self) {
         if !self.writer {
             return;
@@ -1426,16 +1360,6 @@ impl State {
             .collect();
         highlight_and_unhighlight_panes(on, off);
         self.highlighted = want;
-    }
-}
-
-/// Remove a tab mark this plugin wrote, leaving the name the user gave the tab.
-fn strip_tab_mark(name: &str) -> String {
-    match name.rfind(TAB_MARK) {
-        Some(at) if name[at + TAB_MARK.len()..].chars().all(|c| c.is_ascii_digit()) => {
-            name[..at].to_owned()
-        }
-        _ => name.to_owned(),
     }
 }
 
