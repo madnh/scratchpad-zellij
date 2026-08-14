@@ -1,0 +1,49 @@
+name: ci
+
+# Runs on every push and pull request. The release workflow repeats the build and the
+# tests deliberately: a green CI on a branch is not evidence about the tag.
+#
+# No third-party actions. Everything past checkout is a plain shell step against tools
+# the runner already ships, so GitHub is the only party this has to trust.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the wasm target
+        run: rustup target add wasm32-wasip1
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      # Warnings are failures here. Two real bugs in this plugin were dead fields left
+      # behind by a change that looked complete — exactly what this catches.
+      - name: Lints
+        run: cargo clippy --all-targets -- -D warnings
+
+      # Host target: the tests cover the pure functions, and cargo cannot run tests
+      # compiled to wasm.
+      - name: Tests
+        run: cargo test --release
+
+      - name: Build the plugin
+        run: cargo build --release --target wasm32-wasip1
+
+      # A plugin missing an export fails at load with only "could not find exported
+      # function", so check it here rather than in someone's terminal.
+      - name: Check the wasm exports
+        run: |
+          python3 - <<'PY'
+          data = open("target/wasm32-wasip1/release/scratchpad-zellij.wasm", "rb").read()
+          missing = [n for n in (b"load", b"update", b"render", b"pipe") if n not in data]
+          if missing:
+              raise SystemExit(f"missing exports: {missing}")
+          print(f"exports present, {len(data)} bytes")
+          PY

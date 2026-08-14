@@ -783,7 +783,7 @@ impl State {
                 // The difference goes in the text, not the marker column: that column now
                 // means one thing only, and overloading it with a second meaning is how a
                 // legend stops being readable.
-                let holds = holders.iter().any(|h| *h == author);
+                let holds = holders.contains(&author);
                 let turn = turn_marker(!holds, DIM, &self.turn_mark);
                 let note = if holds {
                     format!("{bad}not listening — the pad is open to them{RESET}")
@@ -1456,12 +1456,10 @@ fn strip_badge(title: &str) -> String {
     // ours, and it becomes part of the pane's "original" name — growing by one run every
     // time the badge is rewritten. Neither trailing spaces nor trailing border glyphs ever
     // carry meaning in a pane name, so drop them always.
-    let title = title.trim_end_matches(|c: char| c == ' ' || c == '─' || c == '-');
+    let title = title.trim_end_matches([' ', '─', '-']);
     if title.ends_with(']') {
         if let Some(at) = title.rfind(BADGE) {
-            return title[..at]
-                .trim_end_matches(|c: char| c == ' ' || c == '─' || c == '-')
-                .to_owned();
+            return title[..at].trim_end_matches([' ', '─', '-']).to_owned();
         }
     }
     if title.starts_with(BADGE) {
@@ -1592,4 +1590,185 @@ fn truncate(s: &str, max: usize) -> String {
         return s.to_owned();
     }
     s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every case here comes from something that actually went wrong while building the
+    // plugin, so the tests read as a list of past mistakes rather than of features.
+
+    #[test]
+    fn strips_a_badge_from_either_end() {
+        assert_eq!(strip_badge("[sp ●] Pane #5"), "Pane #5");
+        assert_eq!(strip_badge("Pane #5 [sp ● default-ab3k9x]"), "Pane #5");
+        assert_eq!(strip_badge("Pane #5"), "Pane #5");
+    }
+
+    #[test]
+    fn strips_right_aligned_padding_with_the_badge() {
+        // The dash run and the spaces around it are ours; the name is not.
+        let title = compose_title("Pane #5", "[sp ●]", Align::Right, 60, "─");
+        assert_eq!(strip_badge(&title), "Pane #5");
+    }
+
+    #[test]
+    fn strips_padding_that_outlived_its_badge() {
+        // Measured: zellij can drop the badge and keep the padding. With the mark gone,
+        // nothing else recognises the run as ours, so it must come off unconditionally or
+        // it becomes part of the pane's name and grows on every rewrite.
+        assert_eq!(strip_badge("Pane #5 ─────────"), "Pane #5");
+        assert_eq!(strip_badge("Pane #5     "), "Pane #5");
+    }
+
+    #[test]
+    fn right_alignment_never_runs_the_name_into_the_badge() {
+        // Too narrow to pad: one space is the floor, never zero.
+        let title = compose_title("a-very-long-pane-name", "[sp ●]", Align::Right, 10, "─");
+        assert!(title.starts_with("a-very-long-pane-name "));
+        assert!(title.ends_with("[sp ●]"));
+    }
+
+    #[test]
+    fn reads_a_pad_wait_in_all_three_shapes() {
+        let want = Some(("default-ewhicx".to_owned(), "backend".to_owned()));
+        assert_eq!(
+            parse_wait(&[
+                "scratchpad",
+                "pad",
+                "wait",
+                "default-ewhicx",
+                "--as",
+                "backend"
+            ]),
+            want
+        );
+        assert_eq!(
+            parse_wait(&[
+                "/usr/local/bin/scratchpad",
+                "pad",
+                "wait",
+                "default-ewhicx",
+                "--since",
+                "4",
+                "--as",
+                "backend"
+            ]),
+            want
+        );
+        // Wrapped in a shell, which is how an agent's own background job appears.
+        assert_eq!(
+            parse_wait(&[
+                "zsh",
+                "-c",
+                "scratchpad",
+                "pad",
+                "wait",
+                "default-ewhicx",
+                "--as",
+                "backend"
+            ]),
+            want
+        );
+    }
+
+    #[test]
+    fn refuses_a_half_known_wait() {
+        // A pad with no author cannot be attributed, so it is not reported at all.
+        assert_eq!(
+            parse_wait(&["scratchpad", "pad", "wait", "default-ewhicx"]),
+            None
+        );
+        // `wait` followed by a flag is not a ref.
+        assert_eq!(
+            parse_wait(&["scratchpad", "pad", "wait", "--help", "--as", "x"]),
+            None
+        );
+        assert_eq!(
+            parse_wait(&["scratchpad", "pad", "read", "default-x", "--as", "y"]),
+            None
+        );
+    }
+
+    #[test]
+    fn joins_a_relay_at_either_depth() {
+        // Measured: a pane that runs the agent directly is 0 hops from its relay; one that
+        // runs a shell is 1 or more.
+        let parents = BTreeMap::from([(200, 100), (300, 200), (100, 1)]);
+        assert_eq!(hops_up_to(&parents, 100, 100), Some(0));
+        assert_eq!(hops_up_to(&parents, 300, 100), Some(2));
+    }
+
+    #[test]
+    fn stops_at_init_rather_than_matching_everything() {
+        // Everything descends from pid 1; walking through it would match every pane
+        // against every relay.
+        let parents = BTreeMap::from([(200, 1), (300, 1)]);
+        assert_eq!(hops_up_to(&parents, 200, 300), None);
+    }
+
+    #[test]
+    fn survives_go_encoding_an_empty_list_as_null() {
+        // Measured: this took down the whole document, not just the one field.
+        let doc = br#"{"section_count":6,"authors":null,"protected":false,
+                      "turn":{"blocked":null}}"#;
+        let info = parse_pad_get(doc).expect("null fields must not fail the parse");
+        assert_eq!(info.sections, Some(6));
+        assert!(info.authors.is_empty());
+        assert!(info.blocked.is_empty());
+    }
+
+    #[test]
+    fn reads_the_turn_as_names_not_prose() {
+        let doc = br#"{"authors":["PM","backend"],"turn":{"blocked":["backend"]}}"#;
+        let info = parse_pad_get(doc).unwrap();
+        assert_eq!(info.blocked, vec!["backend"]);
+        let holders: Vec<&String> = info
+            .authors
+            .iter()
+            .filter(|a| !info.blocked.contains(a))
+            .collect();
+        assert_eq!(holders, vec!["PM"]);
+    }
+
+    #[test]
+    fn rejects_output_that_is_not_json() {
+        // An older scratchpad prints its text table; that must not parse into empty truth.
+        assert!(parse_pad_get(b"ref: default-x\nsections: 6\n").is_none());
+    }
+
+    /// Printable width: what the terminal draws, with the escape sequences removed.
+    fn width(s: &str) -> usize {
+        let mut n = 0;
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for c in chars.by_ref() {
+                    if c == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn the_turn_marker_column_is_the_same_width_either_way() {
+        // The marked and unmarked rows must occupy the same columns, or the status dots
+        // stop lining up on exactly the rows the marker is meant to pick out.
+        assert_eq!(width(&turn_marker(true, RED_FOR_TESTS, "⊘")), 2);
+        assert_eq!(width(&turn_marker(false, RED_FOR_TESTS, "⊘")), 2);
+    }
+
+    const RED_FOR_TESTS: &str = "\x1b[31m";
+
+    #[test]
+    fn truncate_counts_characters_not_bytes() {
+        assert_eq!(truncate("Cải thiện relay", 6).chars().count(), 6);
+        assert_eq!(truncate("short", 20), "short");
+    }
 }

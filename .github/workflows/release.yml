@@ -1,0 +1,53 @@
+name: release
+
+# Builds the plugin and attaches the .wasm to a GitHub release, so people can install it
+# by pointing zellij at a URL instead of installing Rust.
+#
+# No third-party actions. Everything past checkout is a plain shell step against tools the
+# runner already ships, so GitHub is the only party this has to trust.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the wasm target
+        run: rustup target add wasm32-wasip1
+
+      # Repeated from CI on purpose: a tag can point at a commit CI never saw.
+      - name: Test
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release --target wasm32-wasip1
+
+      - name: Check the wasm exports
+        run: |
+          python3 - <<'PY'
+          data = open("target/wasm32-wasip1/release/scratchpad-zellij.wasm", "rb").read()
+          missing = [n for n in (b"load", b"update", b"render", b"pipe") if n not in data]
+          if missing:
+              raise SystemExit(f"missing exports: {missing}")
+          print(f"exports present, {len(data)} bytes")
+          PY
+
+      # `gh` is preinstalled on the runner, which is why this needs no release action.
+      # Only tag pushes publish; a manual run just builds and tests.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            target/wasm32-wasip1/release/scratchpad-zellij.wasm \
+            --title "$TAG" \
+            --generate-notes

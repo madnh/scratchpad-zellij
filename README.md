@@ -1,5 +1,7 @@
 # scratchpad-zellij
 
+[![ci](https://github.com/madnh/scratchpad-zellij/actions/workflows/ci.yml/badge.svg)](https://github.com/madnh/scratchpad-zellij/actions/workflows/ci.yml)
+
 A zellij plugin that shows which [scratchpad](https://github.com/madnh/scratchpad) pads
 still have somebody listening, and marks the panes running an agent that nobody is
 listening for.
@@ -40,12 +42,28 @@ to see the state:
   the plugin will say so rather than guess at it.
 - **macOS or Linux.** The process join shells out to `ps -Ao pid=,ppid=,args=`.
 
-## Build
+## Install
+
+Zellij loads a plugin straight from a URL, so nothing needs installing but the URL itself:
+
+```kdl
+plugins {
+    scratchpad location="https://github.com/madnh/scratchpad-zellij/releases/latest/download/scratchpad-zellij.wasm" {
+        scratchpad_bin "/usr/local/bin/scratchpad"
+        label "true"
+        highlight "true"
+    }
+}
+```
+
+Zellij caches the download, so the first load is the only one that touches the network.
+
+### Or build it
 
 ```sh
 rustup target add wasm32-wasip1
 cargo build --release --target wasm32-wasip1
-# → target/wasm32-wasip1/release/scratchpad-zellij.wasm  (~915 KB)
+# → target/wasm32-wasip1/release/scratchpad-zellij.wasm  (~950 KB)
 ```
 
 ## Use
@@ -393,6 +411,18 @@ secret. `pad get` on a protected pad is refused without the password, so those p
 ## Development
 
 ```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --release          # the pure functions; cargo cannot run wasm tests
+```
+
+The tests cover the functions that have actually been wrong: badge stripping, the
+`pad wait` parser, the process-tree walk, and the JSON reader. Each case is a past
+mistake rather than a feature.
+
+Rebuild and reload in one go:
+
+```sh
 cargo build --release --target wasm32-wasip1 && \
 zellij action start-or-reload-plugin \
   -c "scratchpad_bin=$(which scratchpad)" \
@@ -402,6 +432,19 @@ zellij action start-or-reload-plugin \
 Keep exactly **one** instance: changing the `-c` string spawns another (finding 8). Count
 them with `zellij action list-panes | grep scratchpad-zellij`, close extras with
 `focus-pane-id <id>` then `close-pane`.
+
+## Releasing
+
+Push a tag; the workflow builds, tests, verifies the wasm exports and attaches the
+`.wasm` to a GitHub release.
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Both workflows use no third-party actions — every step past `actions/checkout` (pinned by
+SHA) is a shell command against what the runner already ships, so GitHub is the only party
+they have to trust.
 
 ## Licence
 
