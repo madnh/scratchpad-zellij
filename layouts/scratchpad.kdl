@@ -1,0 +1,34 @@
+// A scratchpad status row along the bottom, running all session.
+//
+// It is both the display (one line, because the plugin collapses itself when given one
+// row) and the thing that writes the state badge onto every other pane's frame. Nothing
+// has to be opened to see which agents have somebody listening for them.
+//
+// Usage:  zellij --layout ./layouts/scratchpad.kdl
+//
+// Replace BOTH absolute paths below. `run_command` executes on the zellij SERVER, whose
+// PATH is not the one your shell has, so `scratchpad` alone will usually not resolve.
+
+layout {
+    pane size=1 borderless=true {
+        plugin location="zellij:tab-bar"
+    }
+
+    pane
+
+    pane size=1 borderless=true {
+        plugin location="file:/ABSOLUTE/PATH/TO/scratchpad-zellij.wasm" {
+            scratchpad_bin "/ABSOLUTE/PATH/TO/scratchpad"
+            label     "true"
+            highlight "true"
+
+            // agents "claude,codex,gemini"   // default; add your own command names
+            // label_align "right"            // read finding 7 first: it swallows SCROLL
+            // interval "3.0"
+        }
+    }
+
+    pane size=1 borderless=true {
+        plugin location="zellij:status-bar"
+    }
+}
