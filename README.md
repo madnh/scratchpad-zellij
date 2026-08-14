@@ -72,22 +72,57 @@ The one-line form leads with the number that ever needs acting on:
  scratchpad ● 3 pane(s) with a relay listening
 ```
 
-### Or: a keybinding
+### Register it once, as an alias
 
-In `~/.config/zellij/config.kdl`:
+Zellij can give a plugin a short name. Put the alias in the `plugins` block of
+`~/.config/zellij/config.kdl`, **with the configuration attached to it**:
 
 ```kdl
-bind "s" {
-    LaunchOrFocusPlugin "file:/path/to/scratchpad-zellij.wasm" {
-        floating true
-        move_to_focused_tab true
+plugins {
+    // …zellij's own aliases stay as they are…
+
+    scratchpad location="file:/path/to/scratchpad-zellij.wasm" {
         scratchpad_bin "/usr/local/bin/scratchpad"
         label "true"
         highlight "true"
     }
+}
+```
+
+From then on the bare name works everywhere — layout, keybinding, CLI, and from other
+plugins:
+
+```kdl
+bind "s" {
+    LaunchOrFocusPlugin "scratchpad" { floating true; move_to_focused_tab true }
     SwitchToMode "Normal"
 }
 ```
+
+```kdl
+pane size=1 borderless=true {
+    plugin location="scratchpad"
+}
+```
+
+```sh
+zellij plugin --floating -- scratchpad
+```
+
+**Keep the configuration in the alias and nowhere else.** This is not tidiness: zellij
+keys plugin instances by URL *and* configuration, so a keybinding that repeats the
+settings creates a SECOND instance (finding 8) — two copies then take turns rewriting pane
+titles and the frame visibly flickers. One alias means one instance, whichever way you
+open it.
+
+Two things that cost time to discover:
+
+- **An alias only takes effect in a NEW zellij session.** Configuration is read when the
+  server starts and there is no reload action — `zellij action` offers
+  `start-or-reload-plugin` (reloads a *plugin*), nothing for the config. Until you restart,
+  the alias fails with `Failed to resolve plugin alias` and you need the full `file:` URL.
+- **The CLI needs `--` before the alias**: `zellij plugin --floating -- scratchpad`.
+  Without it the argument parser rejects the bare name.
 
 ### Or: just try it
 
@@ -101,9 +136,9 @@ On first load zellij asks for permissions. The plugin requests exactly three and
 else: `ReadApplicationState` (see the panes), `RunCommands` (call `scratchpad` and `ps`),
 and `ChangeApplicationState` (rename panes, only while labelling is on).
 
-**Use the SAME configuration string everywhere.** A different `-c` string is a different
-instance (see finding 8); the plugin coordinates so they do not fight over pane titles,
-but two copies still cost you for nothing.
+**Use the SAME configuration everywhere**, which an alias gives you for free. A different
+`-c` string is a different instance (finding 8); the plugin coordinates so they do not
+fight over pane titles, but two copies still cost you for nothing.
 
 **`scratchpad_bin` should be an absolute path.** `run_command` runs on the zellij *server*,
 whose PATH is not your shell's.

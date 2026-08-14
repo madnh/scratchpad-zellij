@@ -16,6 +16,13 @@ layout {
 
     pane
 
+    // If you registered the alias in config.kdl (see README), this is all it takes —
+    // the configuration lives there, and every way of opening the plugin then shares
+    // one instance:
+    //
+    //     pane size=1 borderless=true { plugin location="scratchpad" }
+    //
+    // Without an alias, spell it out:
     pane size=1 borderless=true {
         plugin location="file:/ABSOLUTE/PATH/TO/scratchpad-zellij.wasm" {
             scratchpad_bin "/ABSOLUTE/PATH/TO/scratchpad"
