@@ -309,7 +309,17 @@ run with `agents=does-not-exist` and agent panes are still identified correctly.
 The name list stays, because an agent driving scratchpad through the CLI spawns no server
 and leaves no lasting trace.
 
-**12. Emoji presentation, not width, is what breaks column alignment.**
+**12. The theme is available, but only after the mode changes.** `ModeUpdate` carries
+`mode_info.style.colors`, and two of its slots are named for what this panel needs:
+`exit_code_error` and `exit_code_success`. Reading them makes the panel match a custom
+theme, which the eight ANSI colours cannot.
+
+The catch is when it arrives. The event fires on a mode CHANGE, not at load, so a plugin
+opened mid-session renders in plain ANSI until the first `Ctrl p`, then switches to the
+theme. Measured by dumping the pane's escape codes: `31`/`32` before, `38;2;205;214;244`
+after. The ANSI defaults therefore have to look right on their own.
+
+**13. Emoji presentation, not width, is what breaks column alignment.**
 
 | Glyph | East Asian Width | In Unicode's emoji data |
 |---|---|---|
@@ -321,17 +331,17 @@ cell. `▶` and `◀` appear in the emoji data, so a terminal may switch to an e
 draw them **two** cells — pushing the status column out of line on exactly the rows a
 marker is meant to highlight.
 
-**13. Mark the blocked author, not the ones who may speak.** The turn rule blocks exactly
+**14. Mark the blocked author, not the ones who may speak.** The turn rule blocks exactly
 one author, so on a pad of n agents, n−1 hold the turn. Marking those meant n−1 markers
 pointing at the ordinary case, while the one interesting row — who just spoke — had nothing
 on it. Marking the blocked author is always exactly one marker.
 
-**14. One quantity, one format.** Printing `(2)` when nobody was missing and `(1/3)` when
+**15. One quantity, one format.** Printing `(2)` when nobody was missing and `(1/3)` when
 somebody was put two different quantities in the same position, and the only way to tell
 which was to count the rows below. It is always `listening/total` now; the **colour**
 carries "somebody is missing".
 
-**15. `pad get` was prose, and prose is not data.** The turn state used to arrive as
+**16. `pad get` was prose, and prose is not data.** The turn state used to arrive as
 `turn: any author other than "codex" (last message: codex)`. That cannot be turned back
 into a set of names without parsing English, so "who holds the turn" was not implementable
 — not merely hard. `pad get --json` publishes `turn.blocked` as a list of names, and the

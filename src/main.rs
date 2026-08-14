@@ -177,10 +177,62 @@ struct Listener {
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
-const RED: &str = "\x1b[31m";
-const GREEN: &str = "\x1b[32m";
-const YELLOW: &str = "\x1b[33m";
-const CYAN: &str = "\x1b[36m";
+
+/// The four colours this panel speaks in, taken from the user's zellij theme.
+///
+/// Zellij hands a plugin the whole theme in `ModeUpdate` (`mode_info.style.colors`), and
+/// two of the four are named for exactly what they are used for here: `exit_code_error`
+/// for "nobody is listening" and `exit_code_success` for "a relay is". Reading them means
+/// the panel matches whatever theme is in use — including a custom one, which the eight
+/// ANSI colours cannot follow.
+///
+/// The defaults below are those ANSI colours, and they are what renders until the first
+/// `ModeUpdate` arrives — which, measured, is NOT at load: the event fires when the mode
+/// CHANGES. A plugin opened mid-session therefore draws in plain ANSI until the first
+/// `Ctrl p` or `Ctrl t`, then switches to the theme and stays there. That is why the
+/// defaults have to be reasonable on their own rather than placeholders.
+struct Palette {
+    /// Something needs doing: no listener, unread traffic.
+    bad: String,
+    /// Working as intended: a relay is listening.
+    ok: String,
+    /// In between: the agent listens for itself, or somebody is missing.
+    warn: String,
+    /// Structure rather than status: pad refs, headings.
+    accent: String,
+}
+
+impl Default for Palette {
+    fn default() -> Self {
+        Palette {
+            bad: "\x1b[31m".to_owned(),
+            ok: "\x1b[32m".to_owned(),
+            warn: "\x1b[33m".to_owned(),
+            accent: "\x1b[36m".to_owned(),
+        }
+    }
+}
+
+impl Palette {
+    fn from_theme(colors: &Styling) -> Self {
+        Palette {
+            bad: fg(colors.exit_code_error.base),
+            ok: fg(colors.exit_code_success.base),
+            // No theme slot means "warning", so this borrows the emphasis ramp that
+            // zellij's own bars use for secondary highlights.
+            warn: fg(colors.text_unselected.emphasis_3),
+            accent: fg(colors.text_unselected.emphasis_0),
+        }
+    }
+}
+
+/// A `PaletteColor` as a foreground escape sequence.
+fn fg(colour: PaletteColor) -> String {
+    match colour {
+        PaletteColor::Rgb((r, g, b)) => format!("\x1b[38;2;{r};{g};{b}m"),
+        PaletteColor::EightBit(c) => format!("\x1b[38;5;{c}m"),
+    }
+}
 
 /// Where the badge goes in the pane title.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -268,6 +320,8 @@ struct State {
     turn_mark: String,
     /// The glyph heading each pad group.
     pad_mark: String,
+    /// Colours taken from the user's theme; ANSI defaults until `ModeUpdate` arrives.
+    palette: Palette,
     /// Whether to colour the FRAME of a pane running an agent nobody is listening for.
     ///
     /// This goes through `highlight_and_unhighlight_panes`, not `set_pane_color`. The
@@ -333,6 +387,7 @@ impl Default for State {
             pad: DEFAULT_PAD.to_owned(),
             turn_mark: DEFAULT_BLOCKED_MARK.to_owned(),
             pad_mark: DEFAULT_PAD_MARK.to_owned(),
+            palette: Palette::default(),
             highlighting: false,
             highlighted: BTreeSet::new(),
             pads: BTreeMap::new(),
@@ -365,7 +420,10 @@ impl ZellijPlugin for State {
                 .collect();
         }
         self.labelling = configuration.get("label").is_some_and(|v| v == "true");
-        if configuration.get("label_align").is_some_and(|v| v == "right") {
+        if configuration
+            .get("label_align")
+            .is_some_and(|v| v == "right")
+        {
             self.align = Align::Right;
         }
         if let Some(pad) = configuration.get("label_pad") {
@@ -395,6 +453,7 @@ impl ZellijPlugin for State {
             PermissionType::ChangeApplicationState,
         ]);
         subscribe(&[
+            EventType::ModeUpdate,
             EventType::PaneUpdate,
             EventType::RunCommandResult,
             EventType::Timer,
@@ -431,6 +490,10 @@ impl ZellijPlugin for State {
                 }
                 set_timeout(self.interval);
                 false
+            }
+            Event::ModeUpdate(mode_info) => {
+                self.palette = Palette::from_theme(&mode_info.style.colors);
+                true
             }
             Event::PaneUpdate(manifest) => {
                 self.updates += 1;
@@ -498,6 +561,7 @@ impl ZellijPlugin for State {
     }
 
     fn render(&mut self, rows: usize, cols: usize) {
+        let (bad, ok, warn) = (&self.palette.bad, &self.palette.ok, &self.palette.warn);
         // The pane it is given decides what it is. One or two rows in a layout makes it a
         // status line — the summary is the whole point there, and a table would be clipped
         // to its header. Anything taller gets the full view.
@@ -524,19 +588,19 @@ impl ZellijPlugin for State {
         // The counts lead, and the alarming one leads them — the number of agents nobody
         // is listening for is the only figure here that ever needs acting on. It is only
         // painted red when it is not zero, so the colour means something.
-        let alarm = if unattended > 0 { RED } else { DIM };
+        let alarm = if unattended > 0 { bad.as_str() } else { DIM };
         let mut head = vec![format!(
-            "  {BOLD}scratchpad{RESET}  {alarm}✗ {unattended} unattended{RESET} {DIM}·{RESET} {GREEN}● {relayed} relay{RESET} {DIM}·{RESET} {YELLOW}◌ {own} self-waiting{RESET} {DIM}· {} pad{RESET}",
+            "  {BOLD}scratchpad{RESET}  {alarm}✗ {unattended} unattended{RESET} {DIM}·{RESET} {ok}● {relayed} relay{RESET} {DIM}·{RESET} {warn}◌ {own} self-waiting{RESET} {DIM}· {} pad{RESET}",
             self.by_pad().len()
         )];
         if self.permission == Some(false) {
             head.push(format!(
-                "  {RED}PERMISSION DENIED — the plugin cannot read anything.{RESET}"
+                "  {bad}PERMISSION DENIED — the plugin cannot read anything.{RESET}"
             ));
         }
         if self.twins > 0 {
             head.push(format!(
-                "  {YELLOW}{} MORE instance(s) of this plugin running{RESET} {DIM}— {}. Close the extras.{RESET}",
+                "  {warn}{} MORE instance(s) of this plugin running{RESET} {DIM}— {}. Close the extras.{RESET}",
                 self.twins,
                 if self.writer {
                     "this one writes the labels"
@@ -546,7 +610,7 @@ impl ZellijPlugin for State {
             ));
         }
         if let Some(err) = &self.error {
-            head.push(format!("  {RED}lỗi:{RESET} {}", truncate(err, cols)));
+            head.push(format!("  {bad}lỗi:{RESET} {}", truncate(err, cols)));
         }
 
         if self.view == View::Pad {
@@ -602,10 +666,18 @@ impl State {
     /// blank line between groups is doing real work — it is what lets the eye count pads
     /// without reading them.
     fn render_pads(&self) -> Vec<String> {
+        let (bad, ok, warn, accent) = (
+            &self.palette.bad,
+            &self.palette.ok,
+            &self.palette.warn,
+            &self.palette.accent,
+        );
         let mut out = vec![];
         let pads = self.by_pad();
         if pads.is_empty() {
-            out.push(format!("  {DIM}No pad has a listener in this session.{RESET}"));
+            out.push(format!(
+                "  {DIM}No pad has a listener in this session.{RESET}"
+            ));
             return out;
         }
         for (pad_ref, listeners) in &pads {
@@ -642,12 +714,16 @@ impl State {
                 }
                 _ => {
                     let total = listeners.len() + silent.len();
-                    let colour = if silent.is_empty() { DIM } else { YELLOW };
+                    let colour = if silent.is_empty() {
+                        DIM
+                    } else {
+                        warn.as_str()
+                    };
                     format!("{colour}({}/{total}){RESET}", listeners.len())
                 }
             };
             out.push(format!(
-                "  {CYAN}{} {BOLD}{pad_ref}{RESET}{lock} {ratio}{sections}",
+                "  {accent}{} {BOLD}{pad_ref}{RESET}{lock} {ratio}{sections}",
                 self.pad_mark
             ));
 
@@ -670,12 +746,12 @@ impl State {
 
             for l in listeners {
                 let (mark, colour, how) = if l.how == Listen::Relay {
-                    ("●", GREEN, "relay")
+                    ("●", ok.as_str(), "relay")
                 } else {
-                    ("◌", YELLOW, "waiting")
+                    ("◌", warn.as_str(), "waiting")
                 };
                 let bang = if l.pending {
-                    format!(" {RED}!{RESET}")
+                    format!(" {bad}!{RESET}")
                 } else {
                     String::new()
                 };
@@ -710,7 +786,7 @@ impl State {
                 let holds = holders.iter().any(|h| *h == author);
                 let turn = turn_marker(!holds, DIM, &self.turn_mark);
                 let note = if holds {
-                    format!("{RED}not listening — the pad is open to them{RESET}")
+                    format!("{bad}not listening — the pad is open to them{RESET}")
                 } else {
                     format!("{DIM}not listening in this session{RESET}")
                 };
@@ -735,6 +811,7 @@ impl State {
     /// the top, and the panes that are none of scratchpad's business sit last — present,
     /// because "did it even see this pane" is a fair question, but out of the way.
     fn render_panes(&self) -> Vec<String> {
+        let (bad, ok, warn) = (&self.palette.bad, &self.palette.ok, &self.palette.warn);
         let mut unattended = vec![];
         let mut own = vec![];
         let mut relayed = vec![];
@@ -742,7 +819,10 @@ impl State {
 
         for pane in &self.panes {
             let name = truncate(&pane.title, 26);
-            let pid = pane.pid.map(|p| p.to_string()).unwrap_or_else(|| "?".into());
+            let pid = pane
+                .pid
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "?".into());
             match &pane.relay {
                 Some(r) => {
                     let watching = r.watching.as_deref().unwrap_or_default();
@@ -753,7 +833,7 @@ impl State {
                             .iter()
                             .map(|w| {
                                 let bang = if w.pending {
-                                    format!("{RED}!{RESET}")
+                                    format!("{bad}!{RESET}")
                                 } else {
                                     String::new()
                                 };
@@ -763,7 +843,7 @@ impl State {
                             .join(", ")
                     };
                     relayed.push(format!(
-                        "     {GREEN}●{RESET} {name:<26} {DIM}{:<8}{RESET} {pads}",
+                        "     {ok}●{RESET} {name:<26} {DIM}{:<8}{RESET} {pads}",
                         self.agent_name(pane).unwrap_or_else(|| r.command.clone())
                     ));
                 }
@@ -775,12 +855,12 @@ impl State {
                         .collect::<Vec<_>>()
                         .join(", ");
                     own.push(format!(
-                        "     {YELLOW}◌{RESET} {name:<26} {DIM}{:<8}{RESET} {pads}",
+                        "     {warn}◌{RESET} {name:<26} {DIM}{:<8}{RESET} {pads}",
                         self.agent_name(pane).unwrap_or_default()
                     ));
                 }
                 None if self.is_unattended(pane) => unattended.push(format!(
-                    "     {RED}✗{RESET} {name:<26} {DIM}{:<8}{RESET} {RED}nobody listening{RESET} {DIM}pid {pid}{RESET}",
+                    "     {bad}✗{RESET} {name:<26} {DIM}{:<8}{RESET} {bad}nobody listening{RESET} {DIM}pid {pid}{RESET}",
                     self.agent_name(pane).unwrap_or_else(|| "agent".to_owned())
                 )),
                 None => idle.push(format!("     {DIM}— {name}{RESET}")),
@@ -789,9 +869,9 @@ impl State {
 
         let mut out = vec![];
         for (title, colour, group) in [
-            ("UNATTENDED", RED, unattended),
-            ("self-waiting", YELLOW, own),
-            ("relay listening", GREEN, relayed),
+            ("UNATTENDED", bad.as_str(), unattended),
+            ("self-waiting", warn.as_str(), own),
+            ("relay listening", ok.as_str(), relayed),
             ("not using scratchpad", DIM, idle),
         ] {
             if group.is_empty() {
@@ -810,11 +890,17 @@ impl State {
 
     /// The key legend, pinned to the bottom: one line normally, three on `?`.
     fn render_keys(&self) -> Vec<String> {
-        let on = |b: bool| if b { GREEN } else { DIM };
+        let (bad, ok, warn, accent) = (
+            &self.palette.bad,
+            &self.palette.ok,
+            &self.palette.warn,
+            &self.palette.accent,
+        );
+        let on = |b: bool| if b { ok.as_str() } else { DIM };
         if self.keys_open {
             vec![
                 format!(
-                    "  {BOLD}v{RESET} view {CYAN}{}{RESET}  {BOLD}t{RESET} labels {}{}{RESET}  {BOLD}a{RESET} align {CYAN}{}{RESET}  {BOLD}h{RESET} frame colour {}{}{RESET}",
+                    "  {BOLD}v{RESET} view {accent}{}{RESET}  {BOLD}t{RESET} labels {}{}{RESET}  {BOLD}a{RESET} align {accent}{}{RESET}  {BOLD}h{RESET} frame colour {}{}{RESET}",
                     if self.view == View::Pad { "pad" } else { "pane" },
                     on(self.labelling),
                     if self.labelling { "on" } else { "off" },
@@ -823,7 +909,7 @@ impl State {
                     if self.highlighting { "on" } else { "off" },
                 ),
                 format!(
-                    "  {GREEN}●{RESET} a relay listens   {YELLOW}◌{RESET} agent waits itself   {RED}✗{RESET} nobody listens   {DIM}⊘{RESET} posted last, blocked   {RED}!{RESET} unread"
+                    "  {ok}●{RESET} a relay listens   {warn}◌{RESET} agent waits itself   {bad}✗{RESET} nobody listens   {DIM}⊘{RESET} posted last, blocked   {bad}!{RESET} unread"
                 ),
                 format!("  {DIM}(listening/authors) · ? unknown total · 🔒 protected · §N sections · ? close{RESET}"),
             ]
@@ -842,11 +928,7 @@ impl State {
     /// never arrives.
     fn render_summary(&self) {
         let watched = self.panes.iter().filter(|p| p.relay.is_some()).count();
-        let unattended = self
-            .panes
-            .iter()
-            .filter(|p| self.is_unattended(p))
-            .count();
+        let unattended = self.panes.iter().filter(|p| self.is_unattended(p)).count();
 
         if self.permission == Some(false) {
             print!(" scratchpad: permission not granted");
