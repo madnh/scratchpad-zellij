@@ -547,6 +547,24 @@ impl ZellijPlugin for State {
                     self.sync_highlights();
                     true
                 }
+                // Hide, don't close: the plugin keeps running while suppressed, so labels
+                // and highlights stay live and the same `LaunchOrFocusPlugin` keybinding
+                // that opened it brings it back — with all its state intact.
+                BareKey::Esc => {
+                    hide_self();
+                    false
+                }
+                // Close for real. The titles and frames are restored HERE, not left to
+                // BeforeClose: that event also runs, but a cleanup we can issue ourselves
+                // beats one we can no longer observe.
+                BareKey::Char('q') => {
+                    self.labelling = false;
+                    self.highlighting = false;
+                    self.sync_labels();
+                    self.sync_highlights();
+                    close_self();
+                    false
+                }
                 _ => false,
             },
             Event::BeforeClose => {
@@ -911,11 +929,11 @@ impl State {
                 format!(
                     "  {ok}●{RESET} a relay listens   {warn}◌{RESET} agent waits itself   {bad}✗{RESET} nobody listens   {DIM}⊘{RESET} posted last, blocked   {bad}!{RESET} unread"
                 ),
-                format!("  {DIM}(listening/authors) · ? unknown total · 🔒 protected · §N sections · ? close{RESET}"),
+                format!("  {DIM}(listening/authors) · ? unknown total · 🔒 protected · §N sections · {BOLD}Esc{RESET}{DIM} hide pane · {BOLD}q{RESET}{DIM} close pane · ? close help{RESET}"),
             ]
         } else {
             vec![format!(
-                "  {DIM}{BOLD}v{RESET}{DIM} view · {BOLD}t{RESET}{DIM} labels · {BOLD}a{RESET}{DIM} align · {BOLD}h{RESET}{DIM} frame · {BOLD}?{RESET}{DIM} keys{RESET}"
+                "  {DIM}{BOLD}v{RESET}{DIM} view · {BOLD}t{RESET}{DIM} labels · {BOLD}a{RESET}{DIM} align · {BOLD}h{RESET}{DIM} frame · {BOLD}Esc{RESET}{DIM} hide · {BOLD}q{RESET}{DIM} close · {BOLD}?{RESET}{DIM} keys{RESET}"
             )]
         }
     }

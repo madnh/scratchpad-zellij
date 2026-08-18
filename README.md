@@ -22,7 +22,7 @@ nobody hears it.
        ● PM           relay   codex
        ○ backend      —       not listening — the pad is open to them
 ────────────────────────────────────────────────────────────────────
-  v view · t labels · a align · h frame · ? keys
+  v view · t labels · a align · h frame · Esc hide · q close · ? keys
 ```
 
 It also writes a badge onto each pane's own frame, so you do not have to open the panel
@@ -177,7 +177,13 @@ whose PATH is not your shell's.
 | `blocked_mark` | `⊘` | glyph marking the author who posted last |
 
 Keys inside the plugin pane: **`v`** pad ↔ pane view, **`t`** labels, **`a`** alignment,
-**`h`** frame colour, **`?`** the legend.
+**`h`** frame colour, **`?`** the legend, **`Esc`** hide the pane, **`q`** close it.
+
+Hide and close are not the same thing. **`Esc`** suppresses the pane but the plugin keeps
+running — badges and frame colours stay live, and the same `LaunchOrFocusPlugin`
+keybinding that opened it brings it back with its state intact. **`q`** ends the plugin:
+it strips its labels and highlights off every pane first, and the next launch starts
+fresh.
 
 Any glyph you configure must occupy **one terminal cell**. See finding 10.
 
