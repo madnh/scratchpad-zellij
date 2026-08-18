@@ -1,6 +1,6 @@
 [package]
 name = "scratchpad-zellij"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Zellij plugin showing which panes have a scratchpad relay listening for them"
 license = "MIT"
